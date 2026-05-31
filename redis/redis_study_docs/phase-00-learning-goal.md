@@ -21,6 +21,22 @@ tags:
 
 ---
 
+## 이번 Phase에서 정리할 파일
+
+Phase 00에서는 C# 코드를 만들지 않는다.
+
+학습 이유와 기준은 이 문서에 정리하고, 전체 목차는 `redis_study_docs/README.md`에서 관리한다.
+
+```text
+study-notes/
+  redis/
+    redis_study_docs/
+      README.md
+      phase-00-learning-goal.md
+```
+
+---
+
 ## 핵심 개념
 
 ### Redis Stream

@@ -1,4 +1,4 @@
-﻿---
+---
 tags:
   - redis
   - redis-stream
@@ -41,6 +41,26 @@ XLEN game:events
 XRANGE game:events - +
 XREAD COUNT 10 STREAMS game:events 0-0
 ```
+
+---
+
+## 이번 Phase에서 만들 파일
+
+Phase 01에서 만든 `RedisStreamStudy` 콘솔 프로젝트 안에 Stream 기본 실습 파일을 추가한다.
+
+```text
+study-notes/
+  redis/
+    src/
+      RedisStreamStudy/
+        Program.cs
+        Scenarios/
+          BasicStreamScenario.cs
+```
+
+`BasicStreamScenario.cs`에는 Stream에 메시지를 쓰고 읽는 코드를 넣는다.
+
+`Program.cs`에서는 Redis 컨테이너와 연결을 만든 뒤 `BasicStreamScenario`를 호출한다.
 
 ---
 
@@ -125,4 +145,3 @@ milliseconds-sequence
 - 메시지를 읽어도 Stream에서 삭제되지 않는다.
 - `XREAD`는 읽기일 뿐 처리 완료를 의미하지 않는다.
 - Stream이 계속 커질 수 있으므로 보관 정책을 나중에 고민해야 한다.
-

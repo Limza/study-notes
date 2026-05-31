@@ -22,10 +22,30 @@ tags:
 
 ---
 
+## 이번 Phase에서 정리할 파일
+
+새 C# 코드를 만들기보다는 GitHub에서 바로 읽을 수 있는 최종 정리 문서를 보강한다.
+
+```text
+study-notes/
+  redis/
+    README.md
+    reports/
+      incident-report-ack-missing.md
+    redis_study_docs/
+      phase-09-retrospective.md
+```
+
+`README.md`에는 전체 학습 주제와 실행 방법을 짧게 정리한다.
+
+`phase-09-retrospective.md`에는 배운 점, 운영 체크리스트, 다음 실험 후보를 남긴다.
+
+---
+
 ## 전체 실습 흐름 요약
 
 ```text
-1. C#에서 DotNet.Testcontainers로 Redis 컨테이너를 실행한다.
+1. C#에서 Testcontainers로 Redis 컨테이너를 실행한다.
 2. Producer가 Redis Stream에 메시지를 발행한다.
 3. Consumer Group을 만들고 Consumer가 메시지를 읽는다.
 4. Consumer가 ACK 전에 종료되는 장애를 재현한다.

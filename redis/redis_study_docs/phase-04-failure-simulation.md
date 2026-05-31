@@ -1,4 +1,4 @@
-﻿---
+---
 tags:
   - redis
   - redis-stream
@@ -30,6 +30,26 @@ Consumer Group에서 메시지를 읽으면 Redis는 메시지를 특정 Consume
 하지만 `XACK` 전에는 처리 완료가 아니다.
 
 Consumer가 이 시점에 죽으면 메시지는 Pending 상태로 남는다.
+
+---
+
+## 이번 Phase에서 만들 파일
+
+ACK 전 종료 상황은 정상 Consumer 코드와 섞지 않고 장애 재현 시나리오로 분리한다.
+
+```text
+study-notes/
+  redis/
+    src/
+      RedisStreamStudy/
+        Program.cs
+        Scenarios/
+          FailureSimulationScenario.cs
+```
+
+`FailureSimulationScenario.cs`에는 메시지를 읽고 ACK하지 않는 Consumer, 예외 종료, 처리 지연 실험 코드를 넣는다.
+
+`Program.cs`에서는 `FailureSimulationScenario`를 실행해서 Pending 메시지가 남는 상태를 만든다.
 
 ---
 
@@ -123,4 +143,3 @@ delivery count는 최초 전달이면 1
 학습 초반에는 Consumer 장애를 먼저 다룬다.
 
 Redis 컨테이너 중지 실험은 추가 실험으로 둔다.
-

@@ -22,6 +22,23 @@ tags:
 
 ---
 
+## 이번 Phase에서 만들 파일
+
+장애 보고서는 코드가 아니라 실습 결과 문서로 남긴다.
+
+```text
+study-notes/
+  redis/
+    reports/
+      incident-report-ack-missing.md
+```
+
+`incident-report-ack-missing.md`에는 Phase 04~06에서 만든 장애 재현, 추적, 복구 결과를 한 번에 정리한다.
+
+GitHub에 올릴 때는 이 보고서가 “실제로 어떤 장애를 재현했고 어떻게 판단했는지”를 보여주는 포트폴리오 산출물이 된다.
+
+---
+
 ## 장애 보고서 템플릿
 
 ```text

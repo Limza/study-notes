@@ -1,4 +1,4 @@
-﻿---
+---
 tags:
   - redis
   - redis-stream
@@ -43,6 +43,28 @@ XAUTOCLAIM game:events game-workers recovery-consumer 5000 0-0 COUNT 10
 XACK game:events game-workers 1717050000000-0
 XADD game:events:dead-letter * originalId 1717050000000-0 reason processing_failed
 ```
+
+---
+
+## 이번 Phase에서 만들 파일
+
+Pending 메시지 복구는 장애 추적 코드와 분리해서 복구 전용 시나리오로 만든다.
+
+```text
+study-notes/
+  redis/
+    src/
+      RedisStreamStudy/
+        Program.cs
+        Scenarios/
+          FailureSimulationScenario.cs
+          TroubleshootingScenario.cs
+          RecoveryScenario.cs
+```
+
+`RecoveryScenario.cs`에는 `XAUTOCLAIM`, 재처리, `XACK`, Dead Letter Stream 기록 코드를 넣는다.
+
+실습 흐름은 Pending 상태 생성, 상태 조회, 복구 실행, 복구 후 `XPENDING` 재확인 순서로 진행한다.
 
 ---
 
@@ -133,4 +155,3 @@ await database.StreamAddAsync(
 | idle time이 기준 이상 | 복구 후보 |
 | delivery count가 낮음 | 재처리 시도 |
 | delivery count가 높음 | Dead Letter 후보 |
-

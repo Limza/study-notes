@@ -1,4 +1,4 @@
-﻿---
+---
 tags:
   - redis
   - redis-stream
@@ -53,6 +53,27 @@ XINFO GROUPS game:events
 XINFO CONSUMERS game:events game-workers
 XPENDING game:events game-workers
 ```
+
+---
+
+## 이번 Phase에서 만들 파일
+
+Consumer Group 생성과 Consumer별 처리 흐름은 별도 시나리오 파일로 분리한다.
+
+```text
+study-notes/
+  redis/
+    src/
+      RedisStreamStudy/
+        Program.cs
+        Scenarios/
+          BasicStreamScenario.cs
+          ConsumerGroupScenario.cs
+```
+
+`ConsumerGroupScenario.cs`에는 Consumer Group 생성, 메시지 발행, Consumer A/B 처리, ACK 확인 코드를 넣는다.
+
+`Program.cs`에서는 Phase 02 시나리오 대신 `ConsumerGroupScenario`를 실행하도록 바꾼다.
 
 ---
 
@@ -133,4 +154,3 @@ foreach (var entry in entries)
 - Consumer 이름이 `XINFO CONSUMERS`에 남는가?
 - ACK한 메시지는 Pending에서 사라지는가?
 - ACK하지 않은 메시지는 Consumer에 묶여 Pending 상태로 남는가?
-

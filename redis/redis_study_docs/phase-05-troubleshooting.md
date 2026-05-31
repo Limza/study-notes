@@ -1,4 +1,4 @@
-﻿---
+---
 tags:
   - redis
   - redis-stream
@@ -50,6 +50,27 @@ XINFO CONSUMERS game:events game-workers
 XPENDING game:events game-workers
 XPENDING game:events game-workers - + 10
 ```
+
+---
+
+## 이번 Phase에서 만들 파일
+
+장애 추적 명령어는 반복해서 사용할 수 있으므로 조회 전용 시나리오로 분리한다.
+
+```text
+study-notes/
+  redis/
+    src/
+      RedisStreamStudy/
+        Program.cs
+        Scenarios/
+          FailureSimulationScenario.cs
+          TroubleshootingScenario.cs
+```
+
+`TroubleshootingScenario.cs`에는 `XLEN`, `XINFO`, `XPENDING` 조회 코드를 넣는다.
+
+실습 흐름은 `FailureSimulationScenario`로 Pending 상태를 만든 뒤, `TroubleshootingScenario`로 Redis 상태를 읽는 방식으로 진행한다.
 
 ---
 
