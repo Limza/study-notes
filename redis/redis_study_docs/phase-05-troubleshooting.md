@@ -74,6 +74,95 @@ study-notes/
 
 ---
 
+## `TroubleshootingScenario.cs` 작성
+
+먼저 아래 전체 파일 예시를 만든다.
+
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/TroubleshootingScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+TroubleshootingScenario.RunAsync
+```
+
+역할:
+
+```text
+Stream 길이, Consumer Group 상태, Pending 메시지 상세를 조회한다.
+```
+
+```csharp
+using StackExchange.Redis;
+
+namespace RedisStreamStudy.Scenarios;
+
+public static class TroubleshootingScenario
+{
+    public static async Task RunAsync(IDatabase database)
+    {
+        // 상태를 조회할 Stream과 Consumer Group 이름을 정한다.
+        var streamKey = "game:events";
+        var groupName = "game-workers";
+
+        // XLEN으로 Stream에 쌓인 전체 메시지 수를 확인한다.
+        var length = await database.StreamLengthAsync(streamKey);
+        Console.WriteLine($"XLEN {streamKey}: {length}");
+
+        // XINFO GROUPS로 Group별 pending 수와 마지막 전달 ID를 확인한다.
+        var groups = await database.ExecuteAsync("XINFO", "GROUPS", streamKey);
+        Console.WriteLine(groups);
+
+        // XINFO CONSUMERS로 Consumer별 pending 수와 idle 시간을 확인한다.
+        var consumers = await database.ExecuteAsync("XINFO", "CONSUMERS", streamKey, groupName);
+        Console.WriteLine(consumers);
+
+        // XPENDING 요약으로 Group 전체 Pending 상태를 확인한다.
+        var pending = await database.ExecuteAsync("XPENDING", streamKey, groupName);
+        Console.WriteLine(pending);
+
+        // XPENDING 상세로 메시지별 owner, idle time, delivery count를 확인한다.
+        var pendingDetails = await database.ExecuteAsync(
+            "XPENDING",
+            streamKey,
+            groupName,
+            "-",
+            "+",
+            "10");
+
+        Console.WriteLine(pendingDetails);
+    }
+}
+```
+
+`database`는 `Program.cs`에서 만들어서 `TroubleshootingScenario.RunAsync(database)`에 넘긴다.
+
+`Program.cs`의 호출 부분:
+
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Program.cs
+```
+
+```csharp
+// ...
+
+// 먼저 Phase 04 시나리오로 Pending 메시지를 만든다.
+await FailureSimulationScenario.RunAsync(database);
+
+// 그 다음 Redis 상태를 조회해서 장애 추적 정보를 확인한다.
+await TroubleshootingScenario.RunAsync(database);
+
+// ...
+```
+
+---
+
 ## `XLEN`
 
 Stream에 쌓인 전체 메시지 수를 본다.
@@ -140,7 +229,26 @@ XPENDING game:events game-workers - + 10
 
 `StackExchange.Redis`에 고수준 API가 부족한 명령은 `ExecuteAsync`를 사용해도 된다.
 
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/TroubleshootingScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+TroubleshootingScenario.RunAsync
+```
+
+역할:
+
+```text
+XPENDING 상세 조회를 직접 실행해서 Pending 메시지의 owner, idle time, delivery count를 확인한다.
+```
+
 ```csharp
+// StackExchange.Redis에 전용 메서드가 없을 때는 ExecuteAsync로 Redis 명령을 직접 보낸다.
 var result = await database.ExecuteAsync(
     "XPENDING",
     "game:events",
@@ -149,6 +257,7 @@ var result = await database.ExecuteAsync(
     "+",
     "10");
 
+// result에는 Pending 메시지의 owner, idle time, delivery count가 들어 있다.
 Console.WriteLine(result);
 ```
 

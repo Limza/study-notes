@@ -68,6 +68,97 @@ study-notes/
 
 ---
 
+## `RecoveryScenario.cs` 작성
+
+먼저 아래 전체 파일 예시를 만든다.
+
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/RecoveryScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+RecoveryScenario.RunAsync
+```
+
+역할:
+
+```text
+오래된 Pending 메시지를 recovery-consumer가 가져오고, 성공한 메시지를 ACK한다.
+```
+
+```csharp
+using StackExchange.Redis;
+
+namespace RedisStreamStudy.Scenarios;
+
+public static class RecoveryScenario
+{
+    public static async Task RunAsync(IDatabase database)
+    {
+        // 복구 대상 Stream, Consumer Group, 복구 담당 Consumer 이름을 정한다.
+        var streamKey = "game:events";
+        var groupName = "game-workers";
+        var recoveryConsumer = "recovery-consumer";
+
+        // XAUTOCLAIM으로 오래된 Pending 메시지의 소유권을 recovery-consumer로 가져온다.
+        // 5000은 idle time이 5초 이상인 메시지만 가져오겠다는 기준이다.
+        var result = await database.ExecuteAsync(
+            "XAUTOCLAIM",
+            streamKey,
+            groupName,
+            recoveryConsumer,
+            "5000",
+            "0-0",
+            "COUNT",
+            "10");
+
+        Console.WriteLine(result);
+
+        // 복구 명령 실행 후 Pending 상태가 어떻게 바뀌었는지 다시 확인한다.
+        var pendingDetails = await database.ExecuteAsync(
+            "XPENDING",
+            streamKey,
+            groupName,
+            "-",
+            "+",
+            "10");
+
+        Console.WriteLine(pendingDetails);
+    }
+}
+```
+
+`XAUTOCLAIM` 결과를 실제 재처리 코드로 풀어 쓰는 부분은 Redis 응답 파싱이 필요하다.  
+이 Phase에서는 먼저 명령 호출과 결과 확인 흐름을 만들고, 다음 단계에서 메시지별 재처리와 `XACK`를 붙인다.
+
+`database`는 `Program.cs`에서 만들어서 `RecoveryScenario.RunAsync(database)`에 넘긴다.
+
+`Program.cs`의 호출 부분:
+
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Program.cs
+```
+
+```csharp
+// ...
+
+// 먼저 ACK하지 않은 Pending 메시지를 만든다.
+await FailureSimulationScenario.RunAsync(database);
+
+// 그 다음 recovery-consumer가 오래된 Pending 메시지를 가져오게 한다.
+await RecoveryScenario.RunAsync(database);
+
+// ...
+```
+
+---
+
 ## 복구 흐름
 
 ```text
@@ -86,7 +177,26 @@ study-notes/
 
 그럴 때는 `ExecuteAsync`를 사용한다.
 
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/RecoveryScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+RecoveryScenario.RunAsync
+```
+
+역할:
+
+```text
+오래 idle 상태인 Pending 메시지를 recovery-consumer로 가져온다.
+```
+
 ```csharp
+// XAUTOCLAIM으로 오래 idle 상태인 Pending 메시지를 recovery-consumer에게 옮긴다.
 var result = await database.ExecuteAsync(
     "XAUTOCLAIM",
     "game:events",
@@ -104,7 +214,26 @@ Console.WriteLine(result);
 
 ## 처리 성공 후 ACK
 
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/RecoveryScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+RecoveryScenario.RunAsync
+```
+
+역할:
+
+```text
+재처리에 성공한 Pending 메시지를 처리 완료 상태로 만든다.
+```
+
 ```csharp
+// 재처리에 성공한 메시지는 XACK로 Pending 상태에서 제거한다.
 await database.StreamAcknowledgeAsync(
     "game:events",
     "game-workers",
@@ -119,7 +248,26 @@ await database.StreamAcknowledgeAsync(
 
 이런 메시지는 별도 Stream에 기록해서 나중에 수동 분석한다.
 
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/RecoveryScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+RecoveryScenario.RunAsync
+```
+
+역할:
+
+```text
+반복 실패 메시지를 game:events:dead-letter Stream에 따로 기록한다.
+```
+
 ```csharp
+// 반복 실패 메시지는 원본 Stream 대신 Dead Letter Stream에 따로 기록한다.
 await database.StreamAddAsync(
     "game:events:dead-letter",
     new NameValueEntry[]

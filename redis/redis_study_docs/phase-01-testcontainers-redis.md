@@ -122,6 +122,18 @@ study-notes/
 study-notes/redis/src/RedisStreamStudy/Infrastructure/RedisContainerFactory.cs
 ```
 
+클래스 / 메서드:
+
+```text
+RedisContainerFactory.Create
+```
+
+역할:
+
+```text
+Redis 컨테이너 설정을 만들고 Program.cs에서 실행할 수 있게 돌려준다.
+```
+
 ```csharp
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
@@ -132,12 +144,41 @@ public static class RedisContainerFactory
 {
     public static IContainer Create()
     {
+        // Redis 컨테이너 안에서는 기본 포트 6379를 사용한다.
+        // true는 호스트 포트를 고정하지 않고 비어 있는 포트로 자동 매핑한다는 뜻이다.
         return new ContainerBuilder("redis:7-alpine")
             .WithPortBinding(6379, true)
             .WithCleanUp(true)
             .Build();
     }
 }
+```
+
+---
+
+## Redis 포트 바인딩 이해
+
+Redis 서버는 컨테이너 안에서 기본적으로 `6379` 포트로 열린다.
+
+```csharp
+.WithPortBinding(6379, true)
+```
+
+여기서 `6379`는 컨테이너 내부 Redis 포트다.  
+`true`는 내 PC의 포트 번호를 직접 고정하지 않고, Testcontainers가 비어 있는 호스트 포트를 자동으로 잡게 한다.
+
+그래서 연결할 때는 고정 포트 `6379`로 바로 접속하지 않고, 아래처럼 실제로 매핑된 호스트 포트를 조회한다.
+
+```csharp
+var redisPort = redisContainer.GetMappedPublicPort(6379);
+```
+
+`GetMappedPublicPort(6379)`의 `6379`는 `.WithPortBinding(6379, true)`에서 지정한 컨테이너 내부 포트와 같은 값이다.  
+즉 "컨테이너의 6379 포트가 내 PC의 몇 번 포트로 연결됐는지 알려줘"라는 의미다.
+
+```text
+컨테이너 내부 Redis 포트: 6379
+내 PC에서 접속할 포트: Testcontainers가 자동 배정
 ```
 
 ---
@@ -150,6 +191,21 @@ public static class RedisContainerFactory
 study-notes/redis/src/RedisStreamStudy/Program.cs
 ```
 
+클래스 / 메서드:
+
+```text
+Program.Main
+```
+
+역할:
+
+```text
+Redis 컨테이너를 시작하고 mapped port로 연결한 뒤 PING을 보낸다.
+```
+
+기존 `Program.cs`를 아래처럼 수정한다.  
+바뀌지 않는 기존 코드는 `// ...`로 생략한다.
+
 ```csharp
 using RedisStreamStudy.Infrastructure;
 using StackExchange.Redis;
@@ -160,13 +216,17 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        // Phase 01에서 만든 Redis Testcontainer 설정을 가져온다.
         await using var redisContainer = RedisContainerFactory.Create();
 
+        // Redis 컨테이너를 실제로 시작한다.
         await redisContainer.StartAsync();
 
+        // 컨테이너 내부 6379 포트가 호스트의 몇 번 포트로 매핑됐는지 가져온다.
         var redisPort = redisContainer.GetMappedPublicPort(6379);
         var connectionString = $"localhost:{redisPort}";
 
+        // 매핑된 호스트 포트로 Redis에 연결한다.
         await using var connection =
             await ConnectionMultiplexer.ConnectAsync(connectionString);
 
@@ -204,6 +264,12 @@ PingAsync()
 
 예전 C# 콘솔 프로그램은 보통 `void Main`에서 시작했다.
 
+예시 코드:
+
+```text
+Program.Main 메서드 모양을 설명하기 위한 짧은 예시다.
+```
+
 ```csharp
 public static void Main(string[] args)
 {
@@ -212,6 +278,12 @@ public static void Main(string[] args)
 ```
 
 하지만 Redis 연결, 컨테이너 시작, 네트워크 호출처럼 비동기 작업을 `await`하려면 `Main`도 비동기 메서드가 될 수 있다.
+
+예시 코드:
+
+```text
+Program.Main에서 await를 사용할 때의 기본 형태다.
+```
 
 ```csharp
 public static async Task Main(string[] args)
@@ -229,6 +301,12 @@ Main 실행
 ```
 
 `Task<int>`를 반환하면 `int` 값이 프로그램 종료 코드가 된다.
+
+예시 코드:
+
+```text
+Program.Main이 종료 코드를 반환할 때의 형태다.
+```
 
 ```csharp
 public static async Task<int> Main(string[] args)
