@@ -31,6 +31,12 @@ Consumer Group은 하나의 Stream을 여러 Consumer가 나눠 처리하기 위
 
 각 메시지는 그룹 안의 특정 Consumer에게 전달된다.
 
+Redis 서버는 명령을 빠르게 처리하고 메시지를 나눠 주는 역할을 한다.
+
+실제로 오래 걸리는 작업은 Redis 밖의 Consumer 애플리케이션에서 수행된다.
+
+그래서 Consumer를 여러 개 실행하면 메시지를 받은 뒤의 처리 작업을 병렬로 나눌 수 있다.
+
 ---
 
 ### Pending Entries List
@@ -77,18 +83,202 @@ study-notes/
 
 ---
 
+## `ConsumerGroupScenario.cs` 작성
+
+먼저 아래 전체 파일 예시를 만든다.
+
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/ConsumerGroupScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+ConsumerGroupScenario.RunAsync
+```
+
+역할:
+
+```text
+Consumer Group을 만들고, consumer-a와 consumer-b가 메시지를 나눠 처리한 뒤 ACK한다.
+```
+
+```csharp
+using StackExchange.Redis;
+
+namespace RedisStreamStudy.Scenarios;
+
+public static class ConsumerGroupScenario
+{
+    public static async Task RunAsync(IDatabase database)
+    {
+        // Consumer Group을 붙일 Stream 이름과 Group 이름을 정한다.
+        var streamKey = "game:events";
+        var groupName = "game-workers";
+
+        try
+        {
+            // StreamCreateConsumerGroupAsync는 Redis의 XGROUP CREATE 명령에 해당한다.
+            // createStream: true는 Stream이 없어도 함께 만들겠다는 뜻이다.
+            await database.StreamCreateConsumerGroupAsync(
+                streamKey,
+                groupName,
+                position: "0-0",
+                createStream: true);
+        }
+        catch (RedisServerException ex) when (ex.Message.Contains("BUSYGROUP"))
+        {
+            Console.WriteLine("Consumer group already exists.");
+        }
+
+        // Consumer들이 나눠 처리할 테스트 메시지 10개를 Stream에 추가한다.
+        for (var i = 1; i <= 10; i++)
+        {
+            await database.StreamAddAsync(
+                streamKey,
+                new NameValueEntry[]
+                {
+                    new("eventType", "match.completed"),
+                    new("matchId", $"match-{i:000}")
+                });
+        }
+
+        // consumer-a와 consumer-b를 동시에 실행한다.
+        // Redis는 메시지를 나눠 주고, 오래 걸리는 실제 처리는 각 Consumer가 병렬로 수행한다.
+        await Task.WhenAll(
+            ReadAndAckAsync(database, streamKey, groupName, "consumer-a"),
+            ReadAndAckAsync(database, streamKey, groupName, "consumer-b"));
+
+        // 처리 후 Consumer Group과 Pending 상태를 확인한다.
+        await PrintConsumerGroupStatusAsync(database, streamKey, groupName);
+    }
+
+    private static async Task ReadAndAckAsync(
+        IDatabase database,
+        string streamKey,
+        string groupName,
+        string consumerName)
+    {
+        // StreamReadGroupAsync는 Redis의 XREADGROUP 명령에 해당한다.
+        // position: ">"는 아직 Group에 전달되지 않은 새 메시지만 읽겠다는 뜻이다.
+        var entries = await database.StreamReadGroupAsync(
+            key: streamKey,
+            groupName: groupName,
+            consumerName: consumerName,
+            position: ">",
+            count: 5);
+
+        // 실제 서비스에서는 메시지를 읽은 뒤 오래 걸리는 처리를 수행할 수 있다.
+        // ACK는 처리가 성공한 뒤에만 보낸다.
+        foreach (var entry in entries)
+        {
+            Console.WriteLine($"{consumerName} processing: {entry.Id}");
+
+            // 시간이 걸리는 비즈니스 처리를 흉내 낸다.
+            await Task.Delay(TimeSpan.FromSeconds(1));
+
+            // StreamAcknowledgeAsync는 Redis의 XACK 명령에 해당한다.
+            // ACK해야 Pending 상태에서 제거된다.
+            await database.StreamAcknowledgeAsync(
+                streamKey,
+                groupName,
+                entry.Id);
+        }
+    }
+
+    private static async Task PrintConsumerGroupStatusAsync(
+        IDatabase database,
+        string streamKey,
+        string groupName)
+    {
+        // XINFO GROUPS game:events에 해당한다.
+        var groups = await database.StreamGroupInfoAsync(streamKey);
+
+        Console.WriteLine();
+        Console.WriteLine("=== XINFO GROUPS ===");
+        foreach (var group in groups)
+        {
+            Console.WriteLine(
+                $"group={group.Name}, consumers={group.ConsumerCount}, pending={group.PendingMessageCount}, last-delivered-id={group.LastDeliveredId}");
+        }
+
+        // XINFO CONSUMERS game:events game-workers에 해당한다.
+        var consumers = await database.StreamConsumerInfoAsync(streamKey, groupName);
+
+        Console.WriteLine();
+        Console.WriteLine("=== XINFO CONSUMERS ===");
+        foreach (var consumer in consumers)
+        {
+            Console.WriteLine(
+                $"consumer={consumer.Name}, pending={consumer.PendingMessageCount}, idle-ms={consumer.IdleTimeInMilliseconds}");
+        }
+
+        // XPENDING game:events game-workers에 해당한다.
+        var pending = await database.StreamPendingAsync(streamKey, groupName);
+
+        Console.WriteLine();
+        Console.WriteLine("=== XPENDING ===");
+        Console.WriteLine(
+            $"pending={pending.PendingMessageCount}, lowest={pending.LowestPendingMessageId}, highest={pending.HighestPendingMessageId}");
+    }
+}
+```
+
+`database`는 `Program.cs`에서 `connection.GetDatabase()`로 만든 뒤 `ConsumerGroupScenario.RunAsync(database)`에 넘긴다.
+
+`Program.cs`의 호출 부분만 Phase 02와 다르게 바꾼다.
+
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Program.cs
+```
+
+```csharp
+// ...
+
+// Phase 03에서는 Consumer Group 실습 시나리오를 실행한다.
+await ConsumerGroupScenario.RunAsync(database);
+
+// ...
+```
+
+---
+
 ## C#에서 Consumer Group 생성
 
 이미 그룹이 있으면 `BUSYGROUP` 예외가 날 수 있다.
 
 학습 코드에서는 이미 있으면 넘어가도 된다.
 
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/ConsumerGroupScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+ConsumerGroupScenario.RunAsync
+```
+
+역할:
+
+```text
+game:events Stream에 game-workers Consumer Group을 만든다.
+```
+
 ```csharp
+// Consumer Group을 붙일 Stream과 Group 이름을 정한다.
 var streamKey = "game:events";
 var groupName = "game-workers";
 
 try
 {
+    // Consumer Group이 없으면 만들고, 이미 있으면 catch에서 넘어간다.
     await database.StreamCreateConsumerGroupAsync(
         streamKey,
         groupName,
@@ -105,7 +295,26 @@ catch (RedisServerException ex) when (ex.Message.Contains("BUSYGROUP"))
 
 ## C#에서 Consumer Group으로 읽기
 
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/ConsumerGroupScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+ConsumerGroupScenario.RunAsync
+```
+
+역할:
+
+```text
+consumer-a가 새 메시지를 읽고 처리 성공 후 XACK한다.
+```
+
 ```csharp
+// consumer-a가 아직 Group에 전달되지 않은 새 메시지를 최대 5개 읽는다.
 var entries = await database.StreamReadGroupAsync(
     key: "game:events",
     groupName: "game-workers",
@@ -117,12 +326,116 @@ foreach (var entry in entries)
 {
     Console.WriteLine($"Processing: {entry.Id}");
 
+    // 시간이 걸리는 비즈니스 처리를 흉내 낸다.
+    await Task.Delay(TimeSpan.FromSeconds(1));
+
+    // 처리에 성공한 뒤 XACK로 Pending 상태에서 제거한다.
     await database.StreamAcknowledgeAsync(
         "game:events",
         "game-workers",
         entry.Id);
 }
 ```
+
+---
+
+## C#에서 여러 Consumer 병렬 실행
+
+Redis 자체가 모든 비즈니스 처리를 병렬로 해 주는 것은 아니다.
+
+Redis는 Stream 메시지를 Consumer들에게 나눠 주고, Consumer 애플리케이션이 각자 오래 걸리는 작업을 처리한다.
+
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/ConsumerGroupScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+ConsumerGroupScenario.RunAsync
+```
+
+역할:
+
+```text
+consumer-a와 consumer-b를 동시에 실행해서 메시지 처리 작업을 나눠 수행한다.
+```
+
+```csharp
+// consumer-a와 consumer-b를 동시에 실행한다.
+// Redis는 메시지를 나눠 주고, 오래 걸리는 실제 처리는 각 Consumer가 병렬로 수행한다.
+await Task.WhenAll(
+    ReadAndAckAsync(database, streamKey, groupName, "consumer-a"),
+    ReadAndAckAsync(database, streamKey, groupName, "consumer-b"));
+```
+
+Consumer Group의 병렬 처리 이점은 Redis 명령 처리 자체가 아니라,
+메시지를 읽은 뒤의 작업을 여러 Consumer가 나눠 수행할 수 있다는 점에 있다.
+
+---
+
+## C#에서 처리 결과 확인
+
+Consumer Group 상태는 `StackExchange.Redis`의 Stream 정보 API로 확인할 수 있다.
+
+파일 위치:
+
+```text
+study-notes/redis/src/RedisStreamStudy/Scenarios/ConsumerGroupScenario.cs
+```
+
+클래스 / 메서드:
+
+```text
+ConsumerGroupScenario.PrintConsumerGroupStatusAsync
+```
+
+역할:
+
+```text
+Consumer 이름, Consumer별 Pending 개수, Group 전체 Pending 개수를 확인한다.
+```
+
+```csharp
+// XINFO GROUPS game:events에 해당한다.
+var groups = await database.StreamGroupInfoAsync(streamKey);
+
+foreach (var group in groups)
+{
+    Console.WriteLine(
+        $"group={group.Name}, consumers={group.ConsumerCount}, pending={group.PendingMessageCount}");
+}
+
+// XINFO CONSUMERS game:events game-workers에 해당한다.
+var consumers = await database.StreamConsumerInfoAsync(streamKey, groupName);
+
+foreach (var consumer in consumers)
+{
+    Console.WriteLine(
+        $"consumer={consumer.Name}, pending={consumer.PendingMessageCount}");
+}
+
+// XPENDING game:events game-workers에 해당한다.
+var pending = await database.StreamPendingAsync(streamKey, groupName);
+
+Console.WriteLine($"pending={pending.PendingMessageCount}");
+```
+
+모든 메시지를 `XACK`했다면 `pending=0`이 나와야 한다.
+
+`XINFO CONSUMERS` 결과에 `consumer-a`, `consumer-b`가 보이면
+두 Consumer가 실제로 Group 안에 등록된 것이다.
+
+ACK하지 않은 메시지를 확인하고 싶다면 `StreamAcknowledgeAsync` 호출을 잠시 주석 처리하고 다시 실행한다.
+
+```csharp
+// await database.StreamAcknowledgeAsync(streamKey, groupName, entry.Id);
+```
+
+그 상태에서 다시 실행하면 출력의 Pending 개수가 증가하고,
+어떤 Consumer가 메시지를 가져갔는지도 확인할 수 있다.
 
 ---
 
@@ -151,6 +464,6 @@ foreach (var entry in entries)
 
 ## 확인할 점
 
-- Consumer 이름이 `XINFO CONSUMERS`에 남는가?
-- ACK한 메시지는 Pending에서 사라지는가?
-- ACK하지 않은 메시지는 Consumer에 묶여 Pending 상태로 남는가?
+- Consumer 이름이 `XINFO CONSUMERS` 결과에 남는가?
+- ACK한 메시지는 `XINFO GROUPS`나 `XPENDING`에서 Pending 개수가 `0`으로 보이는가?
+- ACK하지 않은 메시지는 `XPENDING`에서 Pending으로 잡히고, `XINFO CONSUMERS`에서 특정 Consumer의 Pending 개수로 보이는가?
