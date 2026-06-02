@@ -65,7 +65,7 @@ tags:
 >
 > 이 상태는 `XPENDING`, `XINFO GROUPS`, `XINFO CONSUMERS`로 추적할 수 있다.
 >
-> 오래 idle 상태인 Pending 메시지는 `XAUTOCLAIM`으로 다른 Consumer가 가져와  
+> idle time이 `min-idle-time` 이상인 Pending 메시지는 `XAUTOCLAIM`으로 다른 Consumer가 가져와  
 > 재처리한 뒤 `XACK`로 완료 처리할 수 있다.
 >
 > 단, Redis Stream은 Redis에 저장되는 자료구조이므로  

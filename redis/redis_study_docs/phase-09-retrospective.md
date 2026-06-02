@@ -50,7 +50,7 @@ study-notes/
 3. Consumer Group을 만들고 Consumer가 메시지를 읽는다.
 4. Consumer가 ACK 전에 종료되는 장애를 재현한다.
 5. XPENDING, XINFO GROUPS, XINFO CONSUMERS로 상태를 확인한다.
-6. XAUTOCLAIM으로 오래된 Pending 메시지를 다른 Consumer가 가져온다.
+6. XAUTOCLAIM으로 idle time이 min-idle-time 이상인 Pending 메시지를 다른 Consumer가 가져온다.
 7. 재처리 성공 후 XACK로 Pending 상태를 정리한다.
 8. 반복 실패 메시지는 Dead Letter Stream으로 분리하는 기준을 세운다.
 ```
@@ -68,7 +68,7 @@ study-notes/
 | `XINFO CONSUMERS stream group` | Consumer별 pending, idle |
 | `XPENDING stream group` | Pending 요약 |
 | `XPENDING stream group - + 10` | Pending 메시지 상세 |
-| `XAUTOCLAIM stream group consumer min-idle-time 0-0` | 오래된 Pending 메시지 소유권 이전 |
+| `XAUTOCLAIM stream group consumer min-idle-time 0-0` | idle time이 min-idle-time 이상인 Pending 메시지 소유권 이전 |
 
 ---
 
@@ -76,7 +76,7 @@ study-notes/
 
 > [!SUMMARY] 장애를 볼 때 순서
 > 먼저 Stream과 Group 상태를 보고,  
-> Pending 메시지가 어느 Consumer에 오래 묶여 있는지 확인한 뒤,  
+> Pending 메시지가 어느 Consumer에 묶여 있고 idle time이 얼마나 되었는지 확인한 뒤,  
 > 복구 Consumer가 가져가도 되는 메시지인지 판단한다.
 
 - [ ] Stream 이름과 Consumer Group 이름을 확인한다.

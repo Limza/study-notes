@@ -22,6 +22,7 @@ public class Program
         var database = connection.GetDatabase();
 
         // await BasicStreamScenario.RunAsync(database); 
-        await ConsumerGroupScenario.RunAsync(database);
+        // await ConsumerGroupScenario.RunAsync(database);
+        await FailureSimulationScenario.RunAsync(database);
     }
 }
