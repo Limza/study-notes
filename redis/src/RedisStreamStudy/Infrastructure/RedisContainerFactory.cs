@@ -5,10 +5,12 @@ namespace RedisStreamStudy.Infrastructure;
 
 public static class RedisContainerFactory
 {
-    public static IContainer Create()
+    private const int RedisContainerPort = 6379;
+
+    public static IContainer Create(int hostPort)
     {
         return new ContainerBuilder("redis:latest")
-            .WithPortBinding(6379, true)
+            .WithPortBinding(hostPort, RedisContainerPort)
             .WithCleanUp(true)
             .Build();
     }

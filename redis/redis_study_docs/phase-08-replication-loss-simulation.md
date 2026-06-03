@@ -142,6 +142,7 @@ public static class ReplicationLossScenario
     public static async Task RunAsync()
     {
         // master와 replica가 컨테이너 이름으로 서로 찾을 수 있도록 Docker network를 만든다.
+        // Guid를 붙여 매 실행마다 겹치지 않는 네트워크 이름을 만든다.
         await using INetwork network = new NetworkBuilder()
             .WithName($"redis-stream-loss-{Guid.NewGuid():N}")
             .Build();
@@ -150,6 +151,10 @@ public static class ReplicationLossScenario
         await network.CreateAsync();
 
         // Producer가 XADD를 보내는 master Redis 컨테이너를 만든다.
+        // WithNetworkAliases("redis-master") 덕분에 같은 Docker network 안의 replica가
+        // redis-master라는 이름으로 master 컨테이너를 찾을 수 있다.
+        // WithPortBinding(6379, true)는 호스트 포트는 자동 배정하고, 컨테이너 내부 6379를 노출한다.
+        // appendonly no는 AOF 영속화 변수를 줄이고 복제 지연 실험에 집중하기 위한 설정이다.
         await using IContainer master = new ContainerBuilder("redis:7.4")
             .WithName($"redis-master-{Guid.NewGuid():N}")
             .WithNetwork(network)
@@ -161,6 +166,7 @@ public static class ReplicationLossScenario
 
         // master를 복제하는 replica Redis 컨테이너를 만든다.
         // redis-master는 위에서 지정한 master 컨테이너의 network alias다.
+        // "--replicaof redis-master 6379"로 시작하면 replica가 부팅하면서 master에 붙는다.
         await using IContainer replica = new ContainerBuilder("redis:7.4")
             .WithName($"redis-replica-{Guid.NewGuid():N}")
             .WithNetwork(network)
@@ -176,10 +182,12 @@ public static class ReplicationLossScenario
 
         // C# 코드가 호스트에서 Redis에 접속할 수 있도록 매핑된 포트를 가져온다.
         // 여기서 6379는 WithPortBinding(6379, true)에 지정한 컨테이너 내부 Redis 포트다.
+        // master와 replica는 둘 다 컨테이너 내부에서는 6379를 쓰지만, 호스트 포트는 서로 다르게 자동 배정된다.
         var masterPort = master.GetMappedPublicPort(6379);
         var replicaPort = replica.GetMappedPublicPort(6379);
 
         // master와 replica에 각각 접속한다.
+        // masterDb에는 쓰기 명령을 보내고, replicaDb에는 복제 결과 확인 명령을 보낸다.
         using var masterRedis = await ConnectionMultiplexer.ConnectAsync($"localhost:{masterPort}");
         using var replicaRedis = await ConnectionMultiplexer.ConnectAsync($"localhost:{replicaPort}");
 
@@ -188,6 +196,7 @@ public static class ReplicationLossScenario
         var replicaDb = replicaRedis.GetDatabase();
 
         // 먼저 baseline 메시지를 써서 replica 복제가 정상인지 확인한다.
+        // 이 메시지가 replica에 보이지 않으면 실험 전에 복제 연결부터 문제가 있는 것이다.
         await masterDb.ExecuteAsync("XADD", "game:events", "*", "type", "baseline", "matchId", "before-break");
         await Task.Delay(500);
 
@@ -196,9 +205,11 @@ public static class ReplicationLossScenario
         Console.WriteLine($"Replica baseline count: {baseline.Length}");
 
         // replica를 master에서 떼어 내 복제가 밀린 상황을 강제로 만든다.
+        // 실제 장애에서는 네트워크 지연이나 failover 타이밍 때문에 비슷한 간극이 생길 수 있다.
         await replica.ExecAsync(new[] { "redis-cli", "REPLICAOF", "NO", "ONE" });
 
         // master에는 쓰기 성공 응답을 받지만 replica에는 복제되지 않을 메시지를 쓴다.
+        // StreamAddAsync가 성공해도, 그 성공이 replica 저장까지 보장한다는 뜻은 아니다.
         var lostCandidateId = await masterDb.StreamAddAsync(
             "game:events",
             new NameValueEntry[]
@@ -210,6 +221,7 @@ public static class ReplicationLossScenario
         Console.WriteLine($"XADD success on master: {lostCandidateId}");
 
         // master 장애를 재현하기 위해 master 컨테이너를 중지한다.
+        // 이 시점에 lostCandidateId가 replica로 복제되지 않았다면, replica에서는 해당 메시지를 볼 수 없다.
         await master.StopAsync();
 
         // master가 죽은 뒤 replica에 남은 Stream 메시지를 조회한다.
@@ -220,6 +232,8 @@ public static class ReplicationLossScenario
         // baseline만 있고 lostCandidateId가 없으면 복제 전 유실 상황이 재현된 것이다.
         foreach (var entry in entriesAfterMasterDown)
         {
+            // replica에 남아 있는 message id만 출력한다.
+            // lostCandidateId가 출력되지 않으면 master 성공 응답 후 replica 미복제 상태였다는 뜻이다.
             Console.WriteLine(entry.Id);
         }
     }

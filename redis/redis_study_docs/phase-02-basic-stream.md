@@ -128,18 +128,23 @@ public static class BasicStreamScenario
 {
     public static async Task RunAsync(IDatabase database)
     {
-        // Redis Stream 이름을 정한다.
+        // 메시지를 저장할 Redis Stream key를 정한다.
+        // 이 key 하나 안에 여러 message id가 시간 순서대로 쌓인다.
         var streamKey = "game:events";
 
         // 같은 Stream에 테스트 메시지 3개를 차례대로 추가한다.
+        // 반복문 한 바퀴가 Redis Stream 메시지 한 건에 해당한다.
         for (var i = 1; i <= 3; i++)
         {
             // StreamAddAsync는 Redis의 XADD 명령에 해당한다.
-            // database는 Program.cs에서 만든 Redis 명령 창구다.
+            // 첫 번째 인자는 메시지를 넣을 Stream key다.
+            // 두 번째 인자는 하나의 message id에 함께 저장할 field-value 목록이다.
             var messageId = await database.StreamAddAsync(
                 streamKey,
                 new NameValueEntry[]
                 {
+                    // eventType, matchId, playerId, score는 각각 Redis key가 아니다.
+                    // game:events Stream 안에 들어가는 메시지 한 건의 field 이름이다.
                     new("eventType", "match.completed"),
                     new("matchId", $"match-{i:000}"),
                     new("playerId", $"player-{i:000}"),
@@ -150,23 +155,27 @@ public static class BasicStreamScenario
         }
 
         // StreamLengthAsync는 Redis의 XLEN 명령에 해당한다.
+        // Stream key 안에 쌓인 전체 메시지 개수를 확인한다.
         var streamLength = await database.StreamLengthAsync(streamKey);
         Console.WriteLine($"Stream length: {streamLength}");
 
         // StreamReadAsync는 Redis의 XREAD 명령에 해당한다.
-        // "0-0"은 Stream의 처음부터 읽겠다는 뜻이다.
+        // "0-0"은 Stream의 가장 처음 message id부터 읽겠다는 뜻이다.
+        // count: 10은 최대 10개까지만 읽겠다는 뜻이다.
         var entries = await database.StreamReadAsync(
             streamKey,
             "0-0",
             count: 10);
 
-        // 읽어 온 메시지의 ID와 field-value 값을 출력한다.
+        // 읽어 온 각 Stream 메시지를 출력한다.
+        // entry.Id는 Redis가 붙인 message id이고, entry.Values는 field-value 목록이다.
         foreach (var entry in entries)
         {
             Console.WriteLine($"MessageId: {entry.Id}");
 
             foreach (var value in entry.Values)
             {
+                // value.Name은 field 이름이고, value.Value는 field 값이다.
                 Console.WriteLine($"{value.Name}: {value.Value}");
             }
         }
@@ -213,17 +222,19 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
-        // ...
-        await using var redisContainer = RedisContainerFactory.Create();
+        // Redis GUI에서 접속하기 쉽게 내 PC의 6379 포트에 Redis 컨테이너를 고정한다.
+        const int redisPort = 6379;
 
-        // ...
+        // RedisContainerFactory가 host port와 container port를 연결한 컨테이너 설정을 만든다.
+        await using var redisContainer = RedisContainerFactory.Create(redisPort);
+
+        // 실제 Docker Redis 컨테이너를 시작한다.
         await redisContainer.StartAsync();
 
-        // 컨테이너 내부 6379 포트가 호스트의 몇 번 포트로 매핑됐는지 가져온다.
-        var redisPort = redisContainer.GetMappedPublicPort(6379);
+        // Redis GUI와 C# 코드가 모두 localhost:6379로 접속하게 한다.
         var connectionString = $"localhost:{redisPort}";
 
-        // Redis 서버와 연결할 통로를 만든다.
+        // StackExchange.Redis의 Redis 연결 관리자를 만든다.
         await using var connection =
             await ConnectionMultiplexer.ConnectAsync(connectionString);
 
@@ -248,12 +259,13 @@ public class Program
 이 코드는 위의 `BasicStreamScenario.RunAsync` 안에 들어 있다.
 
 ```csharp
-// database는 Program.cs에서 넘겨받은 Redis 명령 창구다.
-// StreamAddAsync로 game:events Stream에 메시지를 추가한다.
+// StreamAddAsync는 Redis의 XADD 명령에 해당한다.
+// streamKey에 메시지 한 건을 추가하고, Redis가 만든 message id를 돌려받는다.
 var messageId = await database.StreamAddAsync(
     streamKey,
     new NameValueEntry[]
     {
+        // 이 값들은 Redis key가 아니라 하나의 메시지 안에 들어가는 field-value다.
         new("eventType", "match.completed"),
         new("matchId", $"match-{i:000}"),
         new("playerId", $"player-{i:000}"),
@@ -271,6 +283,7 @@ var messageId = await database.StreamAddAsync(
 
 ```csharp
 // "0-0"부터 읽어서 Stream의 처음 메시지부터 확인한다.
+// count: 10은 최대 10개의 메시지만 가져오겠다는 뜻이다.
 var entries = await database.StreamReadAsync(
     streamKey,
     "0-0",

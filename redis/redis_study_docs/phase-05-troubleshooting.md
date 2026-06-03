@@ -105,27 +105,44 @@ public static class TroubleshootingScenario
 {
     public static async Task RunAsync(IDatabase database)
     {
-        // 상태를 조회할 Stream과 Consumer Group 이름을 정한다.
+        // 장애 상태를 조회할 Redis Stream key를 정한다.
+        // FailureSimulationScenario에서 메시지를 넣고 Pending을 만든 Stream과 같은 이름이어야 한다.
         var streamKey = "game:events";
+
+        // 조회할 Consumer Group 이름을 정한다.
+        // Pending 메시지는 Stream 전체가 아니라 Consumer Group 단위로 관리된다.
         var groupName = "game-workers";
 
-        // XLEN으로 Stream에 쌓인 전체 메시지 수를 확인한다.
+        // 1단계: Stream에 메시지가 실제로 쌓여 있는지 확인한다.
+        // StreamLengthAsync는 Redis의 XLEN 명령에 해당한다.
+        // 값이 0이면 Producer가 메시지를 넣지 못했거나 다른 Stream key를 보고 있을 수 있다.
         var length = await database.StreamLengthAsync(streamKey);
         Console.WriteLine($"XLEN {streamKey}: {length}");
 
-        // XINFO GROUPS로 Group별 pending 수와 마지막 전달 ID를 확인한다.
+        // 2단계: Stream에 어떤 Consumer Group이 붙어 있는지 확인한다.
+        // StackExchange.Redis에 전용 고수준 API가 애매한 명령은 ExecuteAsync로 직접 보낼 수 있다.
+        // XINFO GROUPS는 Group 이름, Consumer 수, Pending 수, 마지막 전달 ID 등을 보여준다.
+        // 여기서 groupName이 안 보이면 Consumer Group 생성이 안 된 것이다.
         var groups = await database.ExecuteAsync("XINFO", "GROUPS", streamKey);
         Console.WriteLine(groups);
 
-        // XINFO CONSUMERS로 Consumer별 pending 수와 idle 시간을 확인한다.
+        // 3단계: Group 안의 Consumer별 상태를 확인한다.
+        // XINFO CONSUMERS는 각 Consumer가 가진 Pending 수와 idle 시간을 보여준다.
+        // idle 시간이 길고 Pending이 많으면 해당 Consumer가 멈췄을 가능성을 의심한다.
         var consumers = await database.ExecuteAsync("XINFO", "CONSUMERS", streamKey, groupName);
         Console.WriteLine(consumers);
 
-        // XPENDING 요약으로 Group 전체 Pending 상태를 확인한다.
+        // 4단계: Group 전체 Pending 상태를 요약해서 확인한다.
+        // XPENDING stream group 형태는 Pending 개수와 Pending message id 범위를 보여준다.
+        // Pending이 0이면 현재 ACK되지 않은 메시지가 없다는 뜻이다.
         var pending = await database.ExecuteAsync("XPENDING", streamKey, groupName);
         Console.WriteLine(pending);
 
-        // XPENDING 상세로 메시지별 owner, idle time, delivery count를 확인한다.
+        // 5단계: Pending 메시지를 하나씩 상세 조회한다.
+        // "-"는 가장 오래된 Pending message id부터 보겠다는 뜻이다.
+        // "+"는 가장 최신 Pending message id까지 보겠다는 뜻이다.
+        // "10"은 그 범위 안에서 오래된 순서로 최대 10개만 가져오겠다는 뜻이다.
+        // 결과에서는 message id, owner consumer, idle time, delivery count를 확인한다.
         var pendingDetails = await database.ExecuteAsync(
             "XPENDING",
             streamKey,
@@ -249,6 +266,7 @@ XPENDING 상세 조회를 직접 실행해서 Pending 메시지의 owner, idle t
 
 ```csharp
 // StackExchange.Redis에 전용 메서드가 없을 때는 ExecuteAsync로 Redis 명령을 직접 보낸다.
+// 아래 인자들은 Redis CLI의 `XPENDING game:events game-workers - + 10`과 같은 순서다.
 var result = await database.ExecuteAsync(
     "XPENDING",
     "game:events",
@@ -257,7 +275,8 @@ var result = await database.ExecuteAsync(
     "+",
     "10");
 
-// result에는 Pending 메시지의 owner, idle time, delivery count가 들어 있다.
+// result에는 Pending 메시지의 message id, owner consumer, idle time, delivery count가 들어 있다.
+// owner와 idle time을 보고 어느 Consumer의 메시지를 복구할지 판단한다.
 Console.WriteLine(result);
 ```
 

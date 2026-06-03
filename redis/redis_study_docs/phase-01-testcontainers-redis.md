@@ -142,12 +142,15 @@ namespace RedisStreamStudy.Infrastructure;
 
 public static class RedisContainerFactory
 {
-    public static IContainer Create()
+    private const int RedisContainerPort = 6379;
+
+    public static IContainer Create(int hostPort)
     {
-        // Redis 컨테이너 안에서는 기본 포트 6379를 사용한다.
-        // true는 호스트 포트를 고정하지 않고 비어 있는 포트로 자동 매핑한다는 뜻이다.
+        // Redis 컨테이너 안에서 열리는 기본 포트는 6379다.
+        // hostPort는 내 PC에서 Redis GUI나 C# 코드가 접속할 포트다.
+        // 아래 바인딩은 "내 PC의 hostPort -> 컨테이너 안의 6379"로 연결한다.
         return new ContainerBuilder("redis:7-alpine")
-            .WithPortBinding(6379, true)
+            .WithPortBinding(hostPort, RedisContainerPort)
             .WithCleanUp(true)
             .Build();
     }
@@ -161,24 +164,26 @@ public static class RedisContainerFactory
 Redis 서버는 컨테이너 안에서 기본적으로 `6379` 포트로 열린다.
 
 ```csharp
-.WithPortBinding(6379, true)
+.WithPortBinding(hostPort, RedisContainerPort)
 ```
 
-여기서 `6379`는 컨테이너 내부 Redis 포트다.  
-`true`는 내 PC의 포트 번호를 직접 고정하지 않고, Testcontainers가 비어 있는 호스트 포트를 자동으로 잡게 한다.
+여기서 `RedisContainerPort`는 컨테이너 내부 Redis 포트다.  
+`hostPort`는 내 PC에서 접속할 포트다.
 
-그래서 연결할 때는 고정 포트 `6379`로 바로 접속하지 않고, 아래처럼 실제로 매핑된 호스트 포트를 조회한다.
+Redis GUI에서 보기 쉽게 하려면 `hostPort`에 `6379`를 넘길 수 있다.
 
 ```csharp
-var redisPort = redisContainer.GetMappedPublicPort(6379);
+const int redisPort = 6379;
+await using var redisContainer = RedisContainerFactory.Create(redisPort);
 ```
 
-`GetMappedPublicPort(6379)`의 `6379`는 `.WithPortBinding(6379, true)`에서 지정한 컨테이너 내부 포트와 같은 값이다.  
-즉 "컨테이너의 6379 포트가 내 PC의 몇 번 포트로 연결됐는지 알려줘"라는 의미다.
+이 방식은 내 PC의 `6379` 포트를 컨테이너 안의 Redis `6379` 포트에 직접 연결한다.
+
+단, 이미 로컬 Redis나 다른 컨테이너가 `6379`를 사용 중이면 컨테이너 시작이 실패할 수 있다.
 
 ```text
 컨테이너 내부 Redis 포트: 6379
-내 PC에서 접속할 포트: Testcontainers가 자동 배정
+내 PC에서 접속할 포트: 6379
 ```
 
 ---
@@ -200,7 +205,7 @@ Program.Main
 역할:
 
 ```text
-Redis 컨테이너를 시작하고 mapped port로 연결한 뒤 PING을 보낸다.
+Redis 컨테이너를 시작하고 localhost:6379로 연결한 뒤 PING을 보낸다.
 ```
 
 기존 `Program.cs`를 아래처럼 수정한다.  
@@ -216,20 +221,25 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
+        // Redis GUI에서 접속하기 쉽게 내 PC의 6379 포트에 Redis 컨테이너를 고정한다.
+        // 이미 로컬 Redis가 6379 포트를 사용 중이면 컨테이너 시작이 실패할 수 있다.
+        const int redisPort = 6379;
+
         // Phase 01에서 만든 Redis Testcontainer 설정을 가져온다.
-        await using var redisContainer = RedisContainerFactory.Create();
+        // redisPort를 넘겨서 host port와 container port를 같은 번호로 바인딩한다.
+        await using var redisContainer = RedisContainerFactory.Create(redisPort);
 
         // Redis 컨테이너를 실제로 시작한다.
         await redisContainer.StartAsync();
 
-        // 컨테이너 내부 6379 포트가 호스트의 몇 번 포트로 매핑됐는지 가져온다.
-        var redisPort = redisContainer.GetMappedPublicPort(6379);
+        // Redis GUI와 C# 코드 모두 localhost:6379로 같은 Redis에 접속한다.
         var connectionString = $"localhost:{redisPort}";
 
-        // 매핑된 호스트 포트로 Redis에 연결한다.
+        // StackExchange.Redis의 Redis 연결 관리자를 만든다.
         await using var connection =
             await ConnectionMultiplexer.ConnectAsync(connectionString);
 
+        // Redis 명령을 보낼 database 객체를 꺼내고 PING으로 연결을 확인한다.
         var database = connection.GetDatabase();
         var pong = await database.PingAsync();
 
@@ -273,6 +283,8 @@ Program.Main 메서드 모양을 설명하기 위한 짧은 예시다.
 ```csharp
 public static void Main(string[] args)
 {
+    // 동기 Main에서는 await를 사용할 수 없다.
+    // 간단한 출력처럼 바로 끝나는 작업만 실행한다.
     Console.WriteLine("Hello");
 }
 ```
@@ -288,6 +300,8 @@ Program.Main에서 await를 사용할 때의 기본 형태다.
 ```csharp
 public static async Task Main(string[] args)
 {
+    // 컨테이너 시작, Redis 연결처럼 비동기 작업은 await로 기다린다.
+    // 그래서 Main의 반환 타입도 Task가 된다.
     await RunAsync();
 }
 ```
@@ -311,7 +325,10 @@ Program.Main이 종료 코드를 반환할 때의 형태다.
 ```csharp
 public static async Task<int> Main(string[] args)
 {
+    // 비동기 작업을 끝까지 기다린 뒤 프로그램 종료 코드를 반환한다.
     await RunAsync();
+
+    // 0은 일반적으로 정상 종료를 의미한다.
     return 0;
 }
 ```
@@ -324,7 +341,7 @@ public static async Task<int> Main(string[] args)
 2. 필요한 NuGet 패키지를 설치한다.
 3. `RedisContainerFactory`를 만든다.
 4. `Program.cs`에서 Redis 컨테이너를 시작한다.
-5. mapped port로 Redis에 연결한다.
+5. localhost:6379로 Redis에 연결한다.
 6. `PING`을 실행한다.
 7. 프로그램 종료 시 컨테이너가 정리되는지 확인한다.
 
@@ -334,7 +351,7 @@ public static async Task<int> Main(string[] args)
 
 - Redis 컨테이너가 매번 새로 시작되는가?
 - 포트 충돌 없이 실행되는가?
-- 고정 `6379`가 아니라 mapped port를 사용하고 있는가?
+- Redis GUI에서 `localhost:6379`로 접속할 수 있는가?
 - Redis 연결 객체를 재사용할 수 있는 구조인가?
 
 ---
@@ -344,5 +361,5 @@ public static async Task<int> Main(string[] args)
 | 문제 | 원인 후보 | 확인 |
 | --- | --- | --- |
 | 컨테이너 시작 실패 | Docker Desktop 미실행 | Docker가 켜져 있는지 확인 |
-| Redis 연결 실패 | mapped port 미사용 | `GetMappedPublicPort(6379)` 사용 |
+| Redis 연결 실패 | 포트 충돌 또는 컨테이너 미시작 | `localhost:6379` 사용 여부와 Docker 상태 확인 |
 | 컨테이너 잔류 | Dispose 누락 | `await using` 또는 `DisposeAsync` 확인 |
