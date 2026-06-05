@@ -112,15 +112,16 @@ namespace RedisStreamStudy.Scenarios;
 
 public static class ConsumerGroupScenario
 {
-    public static async Task RunAsync(IDatabase database)
+    public static async Task RunAsync(
+        IDatabase database,
+        string streamKey,
+        string groupName)
     {
-        // Consumer Group을 붙일 Redis Stream key를 정한다.
+        // Consumer Group을 붙일 Redis Stream key는 Program.cs에서 넘겨받는다.
         // Producer가 추가하는 메시지는 모두 이 Stream에 쌓인다.
-        var streamKey = "game:events";
 
-        // Consumer Group 이름을 정한다.
+        // Consumer Group 이름도 Program.cs에서 넘겨받는다.
         // 같은 Group 안의 Consumer들은 메시지를 나눠서 처리한다.
-        var groupName = "game-workers";
 
         try
         {
@@ -239,7 +240,7 @@ public static class ConsumerGroupScenario
 }
 ```
 
-`database`는 `Program.cs`에서 `connection.GetDatabase()`로 만든 뒤 `ConsumerGroupScenario.RunAsync(database)`에 넘긴다.
+`database`, `streamKey`, `groupName`은 `Program.cs`에서 준비한 뒤 `ConsumerGroupScenario.RunAsync(database, streamKey, groupName)`에 넘긴다.
 
 `Program.cs`의 호출 부분만 Phase 02와 다르게 바꾼다.
 
@@ -252,8 +253,11 @@ study-notes/redis/src/RedisStreamStudy/Program.cs
 ```csharp
 // ...
 
+const string streamKey = "game:events";
+const string groupName = "game-workers";
+
 // Phase 03에서는 Consumer Group 실습 시나리오를 실행한다.
-await ConsumerGroupScenario.RunAsync(database);
+await ConsumerGroupScenario.RunAsync(database, streamKey, groupName);
 
 // ...
 ```
@@ -285,10 +289,8 @@ game:events Stream에 game-workers Consumer Group을 만든다.
 ```
 
 ```csharp
-// Consumer Group을 붙일 Stream과 Group 이름을 정한다.
 // streamKey는 메시지가 쌓이는 Redis key이고, groupName은 메시지를 나눠 처리할 그룹 이름이다.
-var streamKey = "game:events";
-var groupName = "game-workers";
+// 두 값은 Program.cs에서 정해 RunAsync 매개변수로 넘긴다.
 
 try
 {
@@ -333,8 +335,8 @@ consumer-a가 새 메시지를 읽고 처리 성공 후 XACK한다.
 // consumer-a가 아직 Group에 전달되지 않은 새 메시지를 최대 5개 읽는다.
 // 읽은 메시지는 consumer-a의 Pending 상태로 기록된다.
 var entries = await database.StreamReadGroupAsync(
-    key: "game:events",
-    groupName: "game-workers",
+    key: streamKey,
+    groupName: groupName,
     consumerName: "consumer-a",
     position: ">",
     count: 5);
@@ -349,8 +351,8 @@ foreach (var entry in entries)
     // 처리에 성공한 뒤 XACK로 Pending 상태에서 제거한다.
     // 이 호출이 없으면 Redis는 아직 처리 완료되지 않은 메시지로 본다.
     await database.StreamAcknowledgeAsync(
-        "game:events",
-        "game-workers",
+        streamKey,
+        groupName,
         entry.Id);
 }
 ```

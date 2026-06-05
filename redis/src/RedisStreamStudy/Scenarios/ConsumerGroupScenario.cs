@@ -4,16 +4,11 @@ namespace RedisStreamStudy.Scenarios;
 
 public static class ConsumerGroupScenario
 {
-    public static async Task RunAsync(IDatabase database)
+    public static async Task RunAsync(
+        IDatabase database,
+        string streamKey,
+        string groupName)
     {
-        // Consumer Group을 붙일 Redis Stream key를 정한다.
-        // Producer가 추가하는 메시지는 모두 이 Stream에 쌓인다.
-        var streamKey = "game:events";
-
-        // Consumer Group 이름을 정한다.
-        // 같은 Group 안의 Consumer들은 메시지를 나눠서 처리한다.
-        var groupName = "game-workers";
-
         try
         {
             // StreamCreateConsumerGroupAsync는 Redis의 XGROUP CREATE 명령에 해당한다.

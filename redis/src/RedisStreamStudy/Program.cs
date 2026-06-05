@@ -31,14 +31,20 @@ public class Program
         // 각 Scenario는 이 database를 받아서 Stream 명령을 실행한다.
         var database = connection.GetDatabase();
 
-        // await BasicStreamScenario.RunAsync(database);
-        // await ConsumerGroupScenario.RunAsync(database);
+        const string streamKey = "game:events";
+        const string groupName = "game-workers";
+
+        // await BasicStreamScenario.RunAsync(database, streamKey);
+        // await ConsumerGroupScenario.RunAsync(database, streamKey, groupName);
 
         // 먼저 Consumer가 메시지를 읽고 ACK하지 않은 장애 상황을 만든다.
-        await FailureSimulationScenario.RunAsync(database);
+        await FailureSimulationScenario.RunAsync(database, streamKey, groupName);
 
         // 그 다음 Redis Stream 상태를 조회해서 Pending 메시지를 추적한다.
-        await TroubleshootingScenario.RunAsync(database);
+        // await TroubleshootingScenario.RunAsync(database, streamKey, groupName);
+
+        // recovery-consumer 가 idle time 복구 기준을 넘은 Pending 메시지를 가져오게 한다
+        await RecoveryScenario.RunAsync(database, streamKey, groupName);
 
         Console.WriteLine("Redis GUI에서 localhost:6379로 확인하세요.");
         Console.WriteLine("컨테이너를 종료하려면 Enter를 누르세요.");

@@ -126,11 +126,10 @@ namespace RedisStreamStudy.Scenarios;
 
 public static class BasicStreamScenario
 {
-    public static async Task RunAsync(IDatabase database)
+    public static async Task RunAsync(IDatabase database, string streamKey)
     {
-        // 메시지를 저장할 Redis Stream key를 정한다.
+        // 메시지를 저장할 Redis Stream key는 Program.cs에서 넘겨받는다.
         // 이 key 하나 안에 여러 message id가 시간 순서대로 쌓인다.
-        var streamKey = "game:events";
 
         // 같은 Stream에 테스트 메시지 3개를 차례대로 추가한다.
         // 반복문 한 바퀴가 Redis Stream 메시지 한 건에 해당한다.
@@ -184,7 +183,7 @@ public static class BasicStreamScenario
 ```
 
 `database`는 이 파일 안에서 새로 만드는 값이 아니다.  
-`Program.cs`에서 Redis에 연결한 뒤 `connection.GetDatabase()`로 만들고, `RunAsync(database)`에 넘겨준다.
+`Program.cs`에서 Redis에 연결한 뒤 `connection.GetDatabase()`로 `database`를 만들고, `streamKey`와 함께 `RunAsync(database, streamKey)`에 넘겨준다.
 
 ---
 
@@ -241,8 +240,10 @@ public class Program
         // Redis 명령을 보낼 database 객체를 꺼낸다.
         var database = connection.GetDatabase();
 
+        const string streamKey = "game:events";
+
         // Phase 01의 Ping 확인 코드 대신 Stream 기본 실습 코드를 실행한다.
-        await BasicStreamScenario.RunAsync(database);
+        await BasicStreamScenario.RunAsync(database, streamKey);
     }
 }
 ```

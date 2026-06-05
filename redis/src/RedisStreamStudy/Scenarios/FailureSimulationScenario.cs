@@ -4,16 +4,11 @@ namespace RedisStreamStudy.Scenarios;
 
 public static class FailureSimulationScenario
 {
-    public static async Task RunAsync(IDatabase database)
+    public static async Task RunAsync(
+        IDatabase database,
+        string streamKey,
+        string groupName)
     {
-        // 장애 재현에 사용할 Redis Stream key를 정한다.
-        // 모든 테스트 메시지는 이 Stream 안에 message id 단위로 쌓인다.
-        var streamKey = "game:events";
-
-        // Consumer Group 이름을 정한다.
-        // 같은 Group 안의 Consumer들은 메시지를 나눠서 처리한다.
-        var groupName = "game-workers";
-
         // 메시지를 읽을 Consumer 이름을 정한다.
         // 이 Consumer가 메시지를 가져가고 ACK하지 않는 상황을 만들 것이다.
         var consumerName = "consumer-a";
@@ -83,7 +78,7 @@ public static class FailureSimulationScenario
             Console.WriteLine($"Processing before crash: {entry.Id}");
 
             // 처리 시간이 조금 걸리는 것처럼 보이게 하는 지연이다.
-            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            await Task.Delay(TimeSpan.FromMilliseconds(650));
         }
 
         // 실제 프로세스를 종료하지는 않고, ACK 전에 죽었다는 상황만 출력으로 표시한다.

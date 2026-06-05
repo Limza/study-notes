@@ -4,12 +4,8 @@ namespace RedisStreamStudy.Scenarios;
 
 public static class BasicStreamScenario
 {
-    public static async Task RunAsync(IDatabase database)
+    public static async Task RunAsync(IDatabase database, string streamKey)
     {
-        // 메시지를 저장할 Redis Stream key를 정한다.
-        // 이 key 하나 안에 여러 message id가 시간 순서대로 쌓인다.
-        var streamKey = "game:events";
-
         // 같은 Stream에 테스트 메시지 3개를 차례대로 추가한다.
         // 반복문 한 바퀴가 Redis Stream 메시지 한 건에 해당한다.
         for (var i = 1; i <= 3; i++)

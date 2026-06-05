@@ -103,15 +103,16 @@ namespace RedisStreamStudy.Scenarios;
 
 public static class TroubleshootingScenario
 {
-    public static async Task RunAsync(IDatabase database)
+    public static async Task RunAsync(
+        IDatabase database,
+        string streamKey,
+        string groupName)
     {
-        // 장애 상태를 조회할 Redis Stream key를 정한다.
+        // 장애 상태를 조회할 Redis Stream key는 Program.cs에서 넘겨받는다.
         // FailureSimulationScenario에서 메시지를 넣고 Pending을 만든 Stream과 같은 이름이어야 한다.
-        var streamKey = "game:events";
 
-        // 조회할 Consumer Group 이름을 정한다.
+        // 조회할 Consumer Group 이름도 Program.cs에서 넘겨받는다.
         // Pending 메시지는 Stream 전체가 아니라 Consumer Group 단위로 관리된다.
-        var groupName = "game-workers";
 
         // 1단계: Stream에 메시지가 실제로 쌓여 있는지 확인한다.
         // StreamLengthAsync는 Redis의 XLEN 명령에 해당한다.
@@ -156,7 +157,7 @@ public static class TroubleshootingScenario
 }
 ```
 
-`database`는 `Program.cs`에서 만들어서 `TroubleshootingScenario.RunAsync(database)`에 넘긴다.
+`database`, `streamKey`, `groupName`은 `Program.cs`에서 만들어서 `TroubleshootingScenario.RunAsync(database, streamKey, groupName)`에 넘긴다.
 
 `Program.cs`의 호출 부분:
 
@@ -169,11 +170,14 @@ study-notes/redis/src/RedisStreamStudy/Program.cs
 ```csharp
 // ...
 
+const string streamKey = "game:events";
+const string groupName = "game-workers";
+
 // 먼저 Phase 04 시나리오로 Pending 메시지를 만든다.
-await FailureSimulationScenario.RunAsync(database);
+await FailureSimulationScenario.RunAsync(database, streamKey, groupName);
 
 // 그 다음 Redis 상태를 조회해서 장애 추적 정보를 확인한다.
-await TroubleshootingScenario.RunAsync(database);
+await TroubleshootingScenario.RunAsync(database, streamKey, groupName);
 
 // ...
 ```
@@ -269,8 +273,8 @@ XPENDING 상세 조회를 직접 실행해서 Pending 메시지의 owner, idle t
 // 아래 인자들은 Redis CLI의 `XPENDING game:events game-workers - + 10`과 같은 순서다.
 var result = await database.ExecuteAsync(
     "XPENDING",
-    "game:events",
-    "game-workers",
+    streamKey,
+    groupName,
     "-",
     "+",
     "10");

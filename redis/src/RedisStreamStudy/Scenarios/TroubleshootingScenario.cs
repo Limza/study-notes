@@ -4,16 +4,11 @@ namespace RedisStreamStudy.Scenarios;
 
 public static class TroubleshootingScenario
 {
-    public static async Task RunAsync(IDatabase database)
+    public static async Task RunAsync(
+        IDatabase database,
+        string streamKey,
+        string groupName)
     {
-        // 장애 상태를 조회할 Redis Stream key를 정한다.
-        // FailureSimulationScenario에서 메시지를 넣고 Pending을 만든 Stream과 같은 이름이어야 한다.
-        var streamKey = "game:events";
-
-        // 조회할 Consumer Group 이름을 정한다.
-        // Pending 메시지는 Stream 전체가 아니라 Consumer Group 단위로 관리된다.
-        var groupName = "game-workers";
-
         // 1단계: Stream에 메시지가 실제로 쌓여 있는지 확인한다.
         // StreamLengthAsync는 Redis의 XLEN 명령에 해당한다.
         // 값이 0이면 Producer가 메시지를 넣지 못했거나 다른 Stream key를 보고 있을 수 있다.
