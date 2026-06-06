@@ -5,7 +5,7 @@ tags:
   - operation
 ---
 
-# Phase 09. 학습 회고와 운영 체크리스트
+# Phase 10. 학습 회고와 운영 체크리스트
 
 > [!NOTE] 목표
 > Redis Stream 장애 추적 실습을  
@@ -33,12 +33,12 @@ study-notes/
     reports/
       incident-report-ack-missing.md
     redis_study_docs/
-      phase-09-retrospective.md
+      phase-10-retrospective.md
 ```
 
 `README.md`에는 전체 학습 주제와 실행 방법을 짧게 정리한다.
 
-`phase-09-retrospective.md`에는 배운 점, 운영 체크리스트, 다음 실험 후보를 남긴다.
+`phase-10-retrospective.md`에는 배운 점, 운영 체크리스트, 다음 실험 후보를 남긴다.
 
 ---
 
@@ -52,7 +52,8 @@ study-notes/
 5. XPENDING, XINFO GROUPS, XINFO CONSUMERS로 상태를 확인한다.
 6. XAUTOCLAIM으로 idle time이 min-idle-time 이상인 Pending 메시지를 다른 Consumer가 가져온다.
 7. 재처리 성공 후 XACK로 Pending 상태를 정리한다.
-8. 반복 실패 메시지는 Dead Letter Stream으로 분리하는 기준을 세운다.
+8. 반복 실패 메시지는 Dead Letter Stream으로 분리한다.
+9. Redis master 장애와 복제 지연으로 인한 Stream 유실 가능성을 확인한다.
 ```
 
 ---

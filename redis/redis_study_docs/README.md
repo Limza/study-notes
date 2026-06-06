@@ -34,6 +34,7 @@ tags:
   -> 장애 추적
   -> 메시지 복구
   -> 장애 보고서
+  -> 반복 실패 메시지 Dead Letter 분리
   -> Redis 노드 장애와 복제 유실
   -> 학습 회고와 운영 체크리스트
 ```
@@ -51,9 +52,10 @@ tags:
 | 04 | [[phase-04-failure-simulation]] | ACK 전 Consumer 종료 장애 재현 |
 | 05 | [[phase-05-troubleshooting]] | `XPENDING`, `XINFO`로 장애 추적 |
 | 06 | [[phase-06-recovery]] | `XAUTOCLAIM`으로 Pending 메시지 복구 |
-| 07 | [[phase-07-incident-report]] | 운영 관점 장애 보고서 작성 |
-| 08 | [[phase-08-replication-loss-simulation]] | Redis master 장애와 Stream 유실 가능성 재현 |
-| 09 | [[phase-09-retrospective]] | 학습 회고와 운영 체크리스트 정리 |
+| 07 | [[phase-07-incident-report]] | Pending 상태를 Slack 알림 payload로 출력 |
+| 08 | [[phase-08-dead-letter-stream]] | 반복 실패 메시지를 Dead Letter Stream으로 분리 |
+| 09 | [[phase-09-replication-loss-simulation]] | Redis master 장애와 Stream 유실 가능성 재현 |
+| 10 | [[phase-10-retrospective]] | 학습 회고와 운영 체크리스트 정리 |
 
 ---
 
@@ -67,6 +69,9 @@ tags:
 >
 > idle time이 `min-idle-time` 이상인 Pending 메시지는 `XAUTOCLAIM`으로 다른 Consumer가 가져와  
 > 재처리한 뒤 `XACK`로 완료 처리할 수 있다.
+>
+> 반복해서 실패하는 메시지는 다시 재처리하기보다  
+> Dead Letter Stream으로 분리하고 원본 Consumer Group에서는 `XACK`로 정리한다.
 >
 > 단, Redis Stream은 Redis에 저장되는 자료구조이므로  
 > Redis master 장애와 비동기 복제 지연 상황에서는  

@@ -7,7 +7,7 @@ tags:
   - failure-simulation
 ---
 
-# Phase 08. Redis 노드 장애와 Stream 유실 재현
+# Phase 09. Redis 노드 장애와 Stream 유실 재현
 
 > [!NOTE] 목표
 > Redis Stream에서 Consumer 장애는 Pending 추적으로 대응할 수 있다.  

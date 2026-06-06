@@ -40,11 +40,18 @@ public class Program
         // 먼저 Consumer가 메시지를 읽고 ACK하지 않은 장애 상황을 만든다.
         await FailureSimulationScenario.RunAsync(database, streamKey, groupName);
 
+        // Pending 상태를 알림 양식으로 만든 뒤 콘솔에 출력한다.
+        await PendingAlertScenario.RunAsync(database, streamKey, groupName);
+
+        // delivery count가 기준 이상으로 반복 실패한 Pending 메시지를
+        // Dead Letter Stream으로 복사하고 원본 Consumer Group에서는 XACK로 정리한다.
+        await DeadLetterScenario.RunAsync(database, streamKey, groupName);
+
         // 그 다음 Redis Stream 상태를 조회해서 Pending 메시지를 추적한다.
         // await TroubleshootingScenario.RunAsync(database, streamKey, groupName);
 
         // recovery-consumer 가 idle time 복구 기준을 넘은 Pending 메시지를 가져오게 한다
-        await RecoveryScenario.RunAsync(database, streamKey, groupName);
+        // await RecoveryScenario.RunAsync(database, streamKey, groupName);
 
         Console.WriteLine("Redis GUI에서 localhost:6379로 확인하세요.");
         Console.WriteLine("컨테이너를 종료하려면 Enter를 누르세요.");
