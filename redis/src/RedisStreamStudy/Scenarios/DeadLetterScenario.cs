@@ -13,6 +13,7 @@ public static class DeadLetterScenario
         string groupName)
     {
         var consumerName = "consumer-a";
+        var deadLetterConsumerName = "dead-letter-consumer";
         var deadLetterStreamKey = $"{streamKey}:dead-letter";
 
         // 실습에서는 같은 Pending 메시지를 여러 번 다시 읽어서 delivery count를 기준 이상으로 만든다.
@@ -39,30 +40,47 @@ public static class DeadLetterScenario
         Console.WriteLine("=== DEAD LETTER CANDIDATES ===");
         Console.WriteLine($"candidate-count={deadLetterCandidates.Length}");
 
-        foreach (var candidate in deadLetterCandidates)
+        if (deadLetterCandidates.Length == 0)
         {
-            // Pending 상세 정보에는 원본 field-value가 들어 있지 않다.
-            // 그래서 message id로 원본 Stream을 다시 조회해 Dead Letter Stream에 복사할 payload를 만든다.
-            var originalEntries = await database.StreamRangeAsync(
-                streamKey,
-                candidate.MessageId,
-                candidate.MessageId,
-                count: 1);
+            await PrintDeadLetterStreamAsync(database, deadLetterStreamKey);
+            return;
+        }
 
-            if (originalEntries.Length == 0)
+        var candidatesById = deadLetterCandidates.ToDictionary(
+            message => message.MessageId,
+            message => message);
+
+        // XCLAIM stream group consumer min-idle-time message-id ... 와 같은 역할이다.
+        // Dead Letter 전용 Consumer가 소유권을 가져오면서 원본 field-value도 함께 받는다.
+        var claimedEntries = await database.StreamClaimAsync(
+            streamKey,
+            groupName,
+            deadLetterConsumerName,
+            minIdleTimeInMs: 0,
+            messageIds: candidatesById.Keys.ToArray());
+
+        foreach (var originalEntry in claimedEntries)
+        {
+            if (!candidatesById.TryGetValue(originalEntry.Id, out var candidate))
             {
-                Console.WriteLine($"message={candidate.MessageId}, skipped=original-message-not-found");
                 continue;
             }
 
-            var originalEntry = originalEntries[0];
-            var deadLetterFields = BuildDeadLetterFields(streamKey, candidate, originalEntry);
+            var envelope = new DeadLetterEnvelope(
+                OriginalStream: streamKey,
+                OriginalMessageId: candidate.MessageId,
+                OriginalConsumer: candidate.ConsumerName,
+                DeadLetterConsumer: deadLetterConsumerName,
+                IdleTimeMs: candidate.IdleTimeInMilliseconds,
+                DeliveryCount: candidate.DeliveryCount,
+                Reason: "max-delivery-count",
+                OriginalValues: originalEntry.Values);
 
             // XADD game:events:dead-letter * ... 와 같은 역할이다.
             // 원본 메시지와 실패 판단에 필요한 메타데이터를 별도 Stream에 남긴다.
             var deadLetterId = await database.StreamAddAsync(
                 deadLetterStreamKey,
-                deadLetterFields);
+                envelope.ToStreamFields());
 
             // Dead Letter Stream으로 옮긴 뒤에는 원본 Consumer Group의 Pending 목록에서 제거한다.
             // XACK game:events game-workers message-id 와 같은 역할이다.
@@ -101,29 +119,39 @@ public static class DeadLetterScenario
         }
     }
 
-    private static NameValueEntry[] BuildDeadLetterFields(
-        string streamKey,
-        StreamPendingMessageInfo candidate,
-        StreamEntry originalEntry)
+    private sealed record DeadLetterEnvelope(
+        RedisValue OriginalStream,
+        RedisValue OriginalMessageId,
+        RedisValue OriginalConsumer,
+        RedisValue DeadLetterConsumer,
+        long IdleTimeMs,
+        long DeliveryCount,
+        RedisValue Reason,
+        NameValueEntry[] OriginalValues)
     {
-        var fields = new List<NameValueEntry>
+        public NameValueEntry[] ToStreamFields()
         {
-            new("originalStream", streamKey),
-            new("originalMessageId", candidate.MessageId),
-            new("originalConsumer", candidate.ConsumerName),
-            new("idleTimeMs", candidate.IdleTimeInMilliseconds),
-            new("deliveryCount", candidate.DeliveryCount),
-            new("reason", "max-delivery-count")
-        };
+            var fields = new List<NameValueEntry>
+            {
+                new("schema", "redis-stream-dead-letter/v1"),
+                new("originalStream", OriginalStream),
+                new("originalMessageId", OriginalMessageId),
+                new("originalConsumer", OriginalConsumer),
+                new("deadLetterConsumer", DeadLetterConsumer),
+                new("idleTimeMs", IdleTimeMs),
+                new("deliveryCount", DeliveryCount),
+                new("reason", Reason)
+            };
 
-        foreach (var value in originalEntry.Values)
-        {
-            fields.Add(new NameValueEntry(
-                $"original.{value.Name}",
-                value.Value));
+            foreach (var value in OriginalValues)
+            {
+                fields.Add(new NameValueEntry(
+                    $"original.{value.Name}",
+                    value.Value));
+            }
+
+            return fields.ToArray();
         }
-
-        return fields.ToArray();
     }
 
     private static async Task PrintDeadLetterStreamAsync(

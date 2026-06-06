@@ -18,29 +18,10 @@ tags:
 
 - Pending 메시지의 `delivery count`를 확인한다.
 - `delivery count`가 기준 이상인 메시지를 Dead Letter 후보로 판단한다.
-- 원본 Stream에서 메시지 본문을 다시 조회한다.
-- Dead Letter Stream에 원본 메시지와 실패 메타데이터를 복사한다.
+- Dead Letter 전용 Consumer가 후보 메시지의 소유권을 가져온다.
+- 소유권을 가져오면서 원본 메시지 본문도 함께 받는다.
+- 공통 Dead Letter 양식으로 변환해 Dead Letter Stream에 `XADD`한다.
 - 원본 Consumer Group에서는 `XACK`로 Pending 상태를 정리한다.
-
----
-
-## 왜 Dead Letter Stream이 필요한가
-
-`XAUTOCLAIM`으로 Pending 메시지를 다른 Consumer가 가져와 재처리할 수 있다.
-
-하지만 같은 메시지가 계속 실패한다면 다시 가져와도 같은 실패가 반복될 가능성이 높다.
-이런 메시지를 계속 Pending 목록에 남겨 두면 운영자는 정상 복구 대상과 문제 메시지를 구분하기 어려워진다.
-
-그래서 일정 기준 이상 실패한 메시지는 별도 Stream으로 옮긴다.
-이 별도 Stream을 여기서는 Dead Letter Stream이라고 부른다.
-
-```text
-game:events
-  -> 원본 업무 메시지 Stream
-
-game:events:dead-letter
-  -> 반복 실패 메시지를 격리해 두는 Stream
-```
 
 ---
 
@@ -71,12 +52,6 @@ delivery count가 기준 이상인 Pending 메시지를 Dead Letter Stream으로
 
 먼저 전체 파일 예시를 만든다.
 
-파일 위치:
-
-```text
-study-notes/redis/src/RedisStreamStudy/Scenarios/DeadLetterScenario.cs
-```
-
 ```csharp
 using StackExchange.Redis;
 
@@ -93,6 +68,7 @@ public static class DeadLetterScenario
         string groupName)
     {
         var consumerName = "consumer-a";
+        var deadLetterConsumerName = "dead-letter-consumer";
         var deadLetterStreamKey = $"{streamKey}:dead-letter";
 
         // 실습에서는 같은 Pending 메시지를 여러 번 다시 읽어서 delivery count를 기준 이상으로 만든다.
@@ -119,30 +95,47 @@ public static class DeadLetterScenario
         Console.WriteLine("=== DEAD LETTER CANDIDATES ===");
         Console.WriteLine($"candidate-count={deadLetterCandidates.Length}");
 
-        foreach (var candidate in deadLetterCandidates)
+        if (deadLetterCandidates.Length == 0)
         {
-            // Pending 상세 정보에는 원본 field-value가 들어 있지 않다.
-            // 그래서 message id로 원본 Stream을 다시 조회해 Dead Letter Stream에 복사할 payload를 만든다.
-            var originalEntries = await database.StreamRangeAsync(
-                streamKey,
-                candidate.MessageId,
-                candidate.MessageId,
-                count: 1);
+            await PrintDeadLetterStreamAsync(database, deadLetterStreamKey);
+            return;
+        }
 
-            if (originalEntries.Length == 0)
+        var candidatesById = deadLetterCandidates.ToDictionary(
+            message => message.MessageId,
+            message => message);
+
+        // XCLAIM stream group consumer min-idle-time message-id ... 와 같은 역할이다.
+        // Dead Letter 전용 Consumer가 소유권을 가져오면서 원본 field-value도 함께 받는다.
+        var claimedEntries = await database.StreamClaimAsync(
+            streamKey,
+            groupName,
+            deadLetterConsumerName,
+            minIdleTimeInMs: 0,
+            messageIds: candidatesById.Keys.ToArray());
+
+        foreach (var originalEntry in claimedEntries)
+        {
+            if (!candidatesById.TryGetValue(originalEntry.Id, out var candidate))
             {
-                Console.WriteLine($"message={candidate.MessageId}, skipped=original-message-not-found");
                 continue;
             }
 
-            var originalEntry = originalEntries[0];
-            var deadLetterFields = BuildDeadLetterFields(streamKey, candidate, originalEntry);
+            var envelope = new DeadLetterEnvelope(
+                OriginalStream: streamKey,
+                OriginalMessageId: candidate.MessageId,
+                OriginalConsumer: candidate.ConsumerName,
+                DeadLetterConsumer: deadLetterConsumerName,
+                IdleTimeMs: candidate.IdleTimeInMilliseconds,
+                DeliveryCount: candidate.DeliveryCount,
+                Reason: "max-delivery-count",
+                OriginalValues: originalEntry.Values);
 
             // XADD game:events:dead-letter * ... 와 같은 역할이다.
             // 원본 메시지와 실패 판단에 필요한 메타데이터를 별도 Stream에 남긴다.
             var deadLetterId = await database.StreamAddAsync(
                 deadLetterStreamKey,
-                deadLetterFields);
+                envelope.ToStreamFields());
 
             // Dead Letter Stream으로 옮긴 뒤에는 원본 Consumer Group의 Pending 목록에서 제거한다.
             // XACK game:events game-workers message-id 와 같은 역할이다.
@@ -181,29 +174,39 @@ public static class DeadLetterScenario
         }
     }
 
-    private static NameValueEntry[] BuildDeadLetterFields(
-        string streamKey,
-        StreamPendingMessageInfo candidate,
-        StreamEntry originalEntry)
+    private sealed record DeadLetterEnvelope(
+        RedisValue OriginalStream,
+        RedisValue OriginalMessageId,
+        RedisValue OriginalConsumer,
+        RedisValue DeadLetterConsumer,
+        long IdleTimeMs,
+        long DeliveryCount,
+        RedisValue Reason,
+        NameValueEntry[] OriginalValues)
     {
-        var fields = new List<NameValueEntry>
+        public NameValueEntry[] ToStreamFields()
         {
-            new("originalStream", streamKey),
-            new("originalMessageId", candidate.MessageId),
-            new("originalConsumer", candidate.ConsumerName),
-            new("idleTimeMs", candidate.IdleTimeInMilliseconds),
-            new("deliveryCount", candidate.DeliveryCount),
-            new("reason", "max-delivery-count")
-        };
+            var fields = new List<NameValueEntry>
+            {
+                new("schema", "redis-stream-dead-letter/v1"),
+                new("originalStream", OriginalStream),
+                new("originalMessageId", OriginalMessageId),
+                new("originalConsumer", OriginalConsumer),
+                new("deadLetterConsumer", DeadLetterConsumer),
+                new("idleTimeMs", IdleTimeMs),
+                new("deliveryCount", DeliveryCount),
+                new("reason", Reason)
+            };
 
-        foreach (var value in originalEntry.Values)
-        {
-            fields.Add(new NameValueEntry(
-                $"original.{value.Name}",
-                value.Value));
+            foreach (var value in OriginalValues)
+            {
+                fields.Add(new NameValueEntry(
+                    $"original.{value.Name}",
+                    value.Value));
+            }
+
+            return fields.ToArray();
         }
-
-        return fields.ToArray();
     }
 
     private static async Task PrintDeadLetterStreamAsync(
@@ -231,28 +234,34 @@ public static class DeadLetterScenario
 
 ---
 
-## `Program.cs` 호출 추가
+## 왜 `XRANGE`를 따로 쓰지 않았나
 
-파일 위치:
+`XPENDING` 상세 조회는 Pending 메시지의 메타데이터만 보여준다.
 
 ```text
-study-notes/redis/src/RedisStreamStudy/Program.cs
+message id
+owner consumer
+idle time
+delivery count
 ```
 
-`FailureSimulationScenario`가 Pending 메시지를 만들고, `PendingAlertScenario`가 알림 payload를 출력한 다음,
-`DeadLetterScenario`가 반복 실패 메시지를 격리하도록 호출한다.
+즉 `XPENDING` 결과만으로는 원본 `eventType`, `matchId` 같은 field-value를 알 수 없다.
 
-```csharp
-// 먼저 Consumer가 메시지를 읽고 ACK하지 않은 장애 상황을 만든다.
-await FailureSimulationScenario.RunAsync(database, streamKey, groupName);
+원본 본문을 얻는 방법은 두 가지다.
 
-// Pending 상태를 알림 형식으로 만든 뒤 콘솔에 출력한다.
-await PendingAlertScenario.RunAsync(database, streamKey, groupName);
-
-// delivery count가 기준 이상으로 반복 실패한 Pending 메시지를
-// Dead Letter Stream으로 복사하고 원본 Consumer Group에서는 XACK로 정리한다.
-await DeadLetterScenario.RunAsync(database, streamKey, groupName);
+```redis
+XRANGE game:events <message-id> <message-id> COUNT 1
 ```
+
+또는
+
+```redis
+XCLAIM game:events game-workers dead-letter-consumer 0 <message-id>
+```
+
+처음 예제에서는 `XRANGE`로 본문을 다시 조회했다.
+하지만 Dead Letter 처리에서는 어차피 메시지를 정리할 주체가 필요하므로,
+`XCLAIM`으로 Dead Letter 전용 Consumer가 소유권을 가져오면서 본문도 같이 받는 쪽이 더 자연스럽다.
 
 ---
 
@@ -274,26 +283,27 @@ var pendingMessages = await database.StreamPendingMessagesAsync(
     consumerName: RedisValue.Null);
 ```
 
-원본 메시지 본문 조회:
+Dead Letter Consumer가 소유권과 본문을 함께 가져오기:
 
 ```redis
-XRANGE game:events <message-id> <message-id> COUNT 1
+XCLAIM game:events game-workers dead-letter-consumer 0 <message-id>
 ```
 
 C# 코드:
 
 ```csharp
-var originalEntries = await database.StreamRangeAsync(
+var claimedEntries = await database.StreamClaimAsync(
     streamKey,
-    candidate.MessageId,
-    candidate.MessageId,
-    count: 1);
+    groupName,
+    deadLetterConsumerName,
+    minIdleTimeInMs: 0,
+    messageIds: candidatesById.Keys.ToArray());
 ```
 
 Dead Letter Stream에 복사:
 
 ```redis
-XADD game:events:dead-letter * originalMessageId <message-id> reason max-delivery-count ...
+XADD game:events:dead-letter * schema redis-stream-dead-letter/v1 originalMessageId <message-id> ...
 ```
 
 C# 코드:
@@ -301,7 +311,7 @@ C# 코드:
 ```csharp
 var deadLetterId = await database.StreamAddAsync(
     deadLetterStreamKey,
-    deadLetterFields);
+    envelope.ToStreamFields());
 ```
 
 원본 Consumer Group의 Pending 정리:
@@ -321,85 +331,57 @@ var acknowledgedCount = await database.StreamAcknowledgeAsync(
 
 ---
 
-## 판단 기준
+## Dead Letter 공통 양식
+
+이 예제에서는 `DeadLetterEnvelope`를 공통 양식으로 둔다.
 
 ```text
-deliveryCount < 3
-=> 아직 재처리 후보
-
-deliveryCount >= 3
-=> Dead Letter Stream으로 분리
+schema=redis-stream-dead-letter/v1
+originalStream=game:events
+originalMessageId=<원본 메시지 ID>
+originalConsumer=<마지막 소유 Consumer>
+deadLetterConsumer=dead-letter-consumer
+idleTimeMs=<Pending으로 머문 시간>
+deliveryCount=<전달 횟수>
+reason=max-delivery-count
+original.eventType=<원본 eventType>
+original.matchId=<원본 matchId>
 ```
 
-여기서 `3`은 실습용 기준이다.
-운영에서는 메시지 처리 비용, 외부 API 실패 가능성, 재시도 정책을 보고 정해야 한다.
-
-중요한 점은 `pendingCount`가 아니라 `deliveryCount`를 본다는 것이다.
-
-`pendingCount`는 ACK되지 않은 메시지가 몇 개인지만 알려준다.
-하지만 Dead Letter 판단에는 같은 메시지가 몇 번이나 Consumer에게 전달되었는지가 더 중요하다.
+`schema`를 넣어 두면 나중에 Dead Letter 양식을 바꾸더라도 버전별로 해석할 수 있다.
 
 ---
 
-## Dead Letter Stream에 남기는 값
+## 소유권과 `XACK`
 
-| 필드 | 의미 |
-| --- | --- |
-| `originalStream` | 원본 Stream 이름 |
-| `originalMessageId` | 원본 메시지 ID |
-| `originalConsumer` | 마지막으로 메시지를 소유한 Consumer |
-| `idleTimeMs` | ACK 없이 Pending으로 머문 시간 |
-| `deliveryCount` | Consumer에게 전달된 횟수 |
-| `reason` | Dead Letter로 보낸 이유 |
-| `original.eventType` | 원본 메시지의 `eventType` 필드 |
-| `original.matchId` | 원본 메시지의 `matchId` 필드 |
+Pending 메시지는 Consumer Group 안에서 특정 Consumer에게 소유되어 있다.
 
-Dead Letter Stream은 단순히 실패 메시지를 버리는 곳이 아니다.
-나중에 원인을 분석하거나 수동 재처리할 수 있도록 원본 내용과 실패 메타데이터를 같이 남기는 곳이다.
+`XAUTOCLAIM`이나 `XCLAIM`은 이 소유권을 다른 Consumer로 옮긴다.
+이 예제에서는 `dead-letter-consumer`가 소유권을 가져온 뒤 Dead Letter Stream에 기록하고 `XACK`한다.
 
----
-
-## 실행 결과 예시
-
-콘솔에는 반복 전달 준비, 후보 수, Dead Letter Stream 내용이 출력된다.
+하지만 Redis는 `XACK`를 호출할 때 호출자가 메시지 owner인지 검사하지 않는다.
 
 ```text
-=== REDELIVERY ATTEMPT 1 ===
-read-count=5
-
-=== REDELIVERY ATTEMPT 2 ===
-read-count=5
-
-=== DEAD LETTER CANDIDATES ===
-candidate-count=5
-message=1710000000000-0, dead-letter-id=1710000001000-0, acknowledged=1
-
-=== DEAD LETTER STREAM ===
-stream=game:events:dead-letter, count=5
-message=1710000001000-0
-  originalStream=game:events
-  originalMessageId=1710000000000-0
-  originalConsumer=consumer-a
-  idleTimeMs=1200
-  deliveryCount=3
-  reason=max-delivery-count
-  original.eventType=match.completed
-  original.matchId=match-001
+XACK stream group message-id
 ```
 
----
+이 명령은 해당 메시지 ID가 그 Consumer Group의 Pending Entries List에 있으면 제거하고 `1`을 반환한다.
+Pending 목록에 없으면 `0`을 반환한다.
 
-## 실행 흐름
+따라서 소유권 없이도 `XACK`는 가능하다.
+다만 운영 코드에서는 위험하다.
+
+소유권 없이 `XACK`하면 다른 Consumer가 아직 처리 중인 메시지를 Pending 목록에서 지워버릴 수 있다.
+Redis 입장에서는 “처리 완료”로 보이지만, 실제 업무 처리는 끝나지 않았을 수 있다.
+
+그래서 안전한 흐름은 아래처럼 잡는다.
 
 ```text
-1. FailureSimulationScenario가 메시지를 읽고 ACK하지 않아 Pending을 만든다.
-2. PendingAlertScenario가 Pending 상태를 Slack payload로 출력한다.
-3. DeadLetterScenario가 Pending 메시지를 다시 읽어 delivery count를 증가시킨다.
-4. delivery count가 기준 이상인 메시지를 후보로 고른다.
-5. 원본 Stream에서 메시지 본문을 조회한다.
-6. Dead Letter Stream에 원본 본문과 실패 메타데이터를 XADD한다.
-7. 원본 Consumer Group에서는 XACK로 Pending을 정리한다.
+1. XPENDING으로 반복 실패 후보를 찾는다.
+2. XCLAIM 또는 XAUTOCLAIM으로 Dead Letter 처리 Consumer가 소유권을 가져온다.
+3. Dead Letter Stream에 원본 메시지와 실패 메타데이터를 기록한다.
+4. 기록이 성공하면 XACK로 원본 Pending을 정리한다.
 ```
 
-이번 Phase의 핵심은 복구가 항상 재처리를 뜻하지 않는다는 점이다.
-반복 실패 메시지는 정상 메시지 흐름에서 분리하고, 별도 Stream에 남겨서 분석하거나 수동 처리하는 편이 더 안전하다.
+이번 Phase의 핵심은 Dead Letter가 단순 삭제가 아니라는 점이다.
+반복 실패 메시지를 별도 Stream에 보존한 뒤, 원본 Consumer Group에서는 더 이상 재처리 대상이 아니도록 정리하는 것이다.
