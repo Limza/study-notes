@@ -53,7 +53,7 @@ study-notes/
 6. XAUTOCLAIM으로 idle time이 min-idle-time 이상인 Pending 메시지를 다른 Consumer가 가져온다.
 7. 재처리 성공 후 XACK로 Pending 상태를 정리한다.
 8. 반복 실패 메시지는 Dead Letter Stream으로 분리한다.
-9. Redis master 장애와 복제 지연으로 인한 Stream 유실 가능성을 확인한다.
+9. Redis Cluster에서 노드 장애가 발생했을 때의 확인 순서를 정리한다.
 ```
 
 ---

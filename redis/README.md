@@ -38,7 +38,7 @@ study-notes/
           FailureSimulationScenario.cs
           TroubleshootingScenario.cs
           RecoveryScenario.cs
-          ReplicationLossScenario.cs
+          ...
 ```
 
 ## 학습 계획
